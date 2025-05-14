@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rPilot Game Comm Client</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Boxicons CDN -->
+  <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
+  <!-- Socket.IO client -->
+  <script src="https://cdn.socket.io/4.7.1/socket.io.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #999; }
+    /* Disable manual TX button clicks */
+    #txBtn { pointer-events: none; }
+    
+    /* Add sound level visualization */
+    .audio-level {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-left: 5px;
+      transition: background-color 0.2s;
+    }
+    .audio-active {
+      background-color: #22c55e;
+      box-shadow: 0 0 5px #22c55e;
+    }
+    .audio-inactive {
+      background-color: #6b7280;
+    }
+    
+    /* Add a visual indicator for active connections */
+    .peer-indicator {
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+    
+    /* Add debug panel */
+    #debugPanel {
+      max-height: 150px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 11px;
+    }
+
+    /* Custom audio player styling */
+    .custom-audio {
+      width: 100%;
+      height: 24px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      background-color: #f3f4f6;
+    }
+    
+    .audio-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: #4b5563;
+      margin-bottom: 2px;
+    }
+  </style>
+</head>
+<body class="bg-white text-black antialiased flex flex-col h-screen">
+  <header class="bg-white shadow p-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold">rPilot</h1>
+    <div class="flex space-x-4 items-center">
+      <div class="flex items-center mr-2">
+        <button id="rxBtn" class="flex items-center border border-black rounded px-2 py-1 transition-opacity opacity-50">
+          <i class='bx bxs-radio mr-1'></i>RX
+        </button>
+        <span id="rxIndicator" class="audio-level audio-inactive ml-1"></span>
+      </div>
+      <div class="flex items-center">
+        <button id="txBtn" class="flex items-center border border-black rounded px-2 py-1 transition-opacity opacity-50">
+          <i class='bx bxs-radio mr-1'></i>TX
+        </button>
+        <span id="txIndicator" class="audio-level audio-inactive ml-1"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-grow grid grid-cols-1 md:grid-cols-2 gap-6 p-6">
+    <section id="chatSection" class="border border-black rounded p-4 flex flex-col">
+      <h2 class="text-xl font-semibold mb-2">Chat</h2>
+      <div id="chatBox" class="flex-grow overflow-y-auto mb-2 p-2 border border-gray-200 rounded">
+        <ul id="messages" class="space-y-1 text-sm"></ul>
+      </div>
+      <div class="flex space-x-2">
+        <input id="messageInput" type="text" placeholder="Type a message" class="flex-grow border border-black p-2 rounded focus:outline-none focus:ring-2 focus:ring-black" />
+        <button id="sendBtn" class="border border-black px-4 py-2 rounded hover:bg-black hover:text-white transition">Send</button>
+      </div>
+    </section>
+
+    <section id="controlSection" class="border border-black rounded p-4 flex flex-col">
+      <h2 class="text-xl font-semibold mb-4">Connection</h2>
+      <input id="callsign" type="text" placeholder="Enter your callsign" class="border border-black p-2 mb-2 rounded focus:outline-none focus:ring-2 focus:ring-black" />
+      <div class="flex space-x-2 mb-4">
+        <input id="freqInput" type="text" placeholder="Enter frequency" class="flex-grow border border-black p-2 rounded focus:outline-none focus:ring-2 focus:ring-black" />
+        <button id="searchBtn" class="border border-black px-4 py-2 rounded hover:bg-black hover:text-white transition">Search Nearby</button>
+      </div>
+      <button id="connectBtn" class="border border-black px-4 py-2 rounded hover:bg-black hover:text-white transition mb-4">Connect</button>
+      
+      <div class="flex justify-between mb-2">
+        <h3 class="font-semibold">Nearby Frequencies</h3>
+        <div id="audioStatus" class="text-xs text-gray-500"></div>
+      </div>
+      
+      <ul id="freqList" class="overflow-y-auto space-y-1 text-sm mb-4"></ul>
+      
+      <h3 class="font-semibold mb-2">Connected Peers</h3>
+      <ul id="peerList" class="overflow-y-auto space-y-1 text-sm mb-4"></ul>
+      
+      <div class="mt-2">
+        <div class="flex justify-between mb-1">
+          <h3 class="font-semibold text-xs">Debug Info</h3>
+          <button id="toggleDebug" class="text-xs text-gray-500">Show/Hide</button>
+        </div>
+        <div id="debugPanel" class="border border-gray-200 p-2 rounded hidden"></div>
+      </div>
+    </section>
+  </main>
+  
+  <!-- Audio container - Styled to be more compact and blend with UI -->
+  <div id="audioContainer" class="fixed bottom-16 right-4 p-2 bg-gray-100 rounded-lg shadow-md max-w-xs overflow-y-auto max-h-40 border border-gray-200"></div>
+
+  <footer class="bg-white border-t border-gray-200 p-4 text-center text-xs">
+    &copy; 2025 rPilot &mdash; Prototype
+  </footer>
+
+  <script>
+    const API_URL = 'https://855c4e41-f3a7-4a37-b719-ea1dbb07241f-00-1c8l15bbg2fim.kirk.replit.dev';
+    const socket = io(API_URL);
+    const peers = {};
+    let localStream;
+    let micAvailable = false;
+    let myCallsign = '';
+    let myFreq = '';
+    
+    // Debug logging function
+    function logDebug(message) {
+      const debugPanel = document.getElementById('debugPanel');
+      const logEntry = document.createElement('div');
+      logEntry.textContent = `[${new Date().toISOString().substr(11, 8)}] ${message}`;
+      debugPanel.appendChild(logEntry);
+      debugPanel.scrollTop = debugPanel.scrollHeight;
+      console.log(message);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const sendBtn = document.getElementById('sendBtn');
+      const input = document.getElementById('messageInput');
+      const messages = document.getElementById('messages');
+      const rxBtn = document.getElementById('rxBtn');
+      const txBtn = document.getElementById('txBtn');
+      const freqInput = document.getElementById('freqInput');
+      const searchBtn = document.getElementById('searchBtn');
+      const freqList = document.getElementById('freqList');
+      const connectBtn = document.getElementById('connectBtn');
+      const peerList = document.getElementById('peerList');
+      const audioContainer = document.getElementById('audioContainer');
+      const audioStatus = document.getElementById('audioStatus');
+      const rxIndicator = document.getElementById('rxIndicator');
+      const txIndicator = document.getElementById('txIndicator');
+      const toggleDebug = document.getElementById('toggleDebug');
+      const debugPanel = document.getElementById('debugPanel');
+      
+      // Hide audio container initially
+      audioContainer.classList.add('hidden');
+      
+      // Toggle debug panel
+      toggleDebug.addEventListener('click', () => {
+        debugPanel.classList.toggle('hidden');
+      });
+
+      async function initLocalStream() {
+        if (!localStream) {
+          try {
+            logDebug('Requesting microphone access...');
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              } 
+            });
+            
+            localStream.getAudioTracks()[0].enabled = false;
+            micAvailable = true;
+            audioStatus.textContent = 'Microphone: Available';
+            logDebug('Microphone access granted');
+            
+            // Create audio meter for local audio
+            createAudioMeter(localStream, txIndicator);
+            
+          } catch (err) {
+            logDebug(`Audio init error: ${err.message}`);
+            audioStatus.textContent = 'Microphone: Unavailable ⚠️';
+            alert('Microphone not found or access denied. Voice disabled.');
+            txBtn.disabled = true;
+            rxBtn.disabled = true;
+          }
+        }
+      }
+      
+      function createAudioMeter(stream, indicator) {
+        try {
+          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const source = audioContext.createMediaStreamSource(stream);
+          const analyser = audioContext.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          
+          const bufferLength = analyser.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+          
+          function checkAudio() {
+            analyser.getByteFrequencyData(dataArray);
+            
+            // Calculate average volume
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+              sum += dataArray[i];
+            }
+            const avg = sum / bufferLength;
+            
+            // Update indicator if above threshold
+            if (avg > 10) {
+              indicator.classList.replace('audio-inactive', 'audio-active');
+            } else {
+              indicator.classList.replace('audio-active', 'audio-inactive');
+            }
+            
+            requestAnimationFrame(checkAudio);
+          }
+          
+          checkAudio();
+        } catch (err) {
+          logDebug(`Audio meter error: ${err.message}`);
+        }
+      }
+
+      // Handle system messages
+      sendBtn.addEventListener('click', () => {
+        const text = input.value.trim();
+        if (!text) return;
+        socket.emit('message', text);
+        input.value = '';
+      });
+      
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          sendBtn.click();
+        }
+      });
+
+      socket.on('message', ({ from, text }) => {
+        const li = document.createElement('li');
+        li.textContent = `${from}: ${text}`;
+        messages.appendChild(li);
+        messages.scrollTop = messages.scrollHeight;
+      });
+
+      socket.on('system', msg => {
+        const li = document.createElement('li');
+        li.textContent = `* ${msg}`;
+        li.classList.add('italic');
+        messages.appendChild(li);
+        messages.scrollTop = messages.scrollHeight;
+        
+        logDebug(`System: ${msg}`);
+
+        // Check if someone joined
+        if (msg.includes(' joined ')) {
+          const [peer] = msg.split(' joined ');
+          if (peer !== myCallsign && micAvailable) {
+            logDebug(`Starting connection with ${peer}`);
+            startPeerConnection(peer, true);
+            updatePeerList();
+          }
+        }
+        
+        // Check if someone left
+        if (msg.includes(' left ')) {
+          const [peer] = msg.split(' left ');
+          if (peer !== myCallsign && peers[peer]) {
+            logDebug(`Peer ${peer} left, closing connection`);
+            peers[peer].close();
+            delete peers[peer];
+            
+            // Remove audio element
+            const audio = document.getElementById(`audio-${peer}`);
+            if (audio) audio.remove();
+            
+            updatePeerList();
+          }
+        }
+      });
+      
+      socket.on('error', (msg) => {
+        logDebug(`Socket error: ${msg}`);
+        alert(`Error: ${msg}`);
+      });
+
+      function updatePeerList() {
+        peerList.innerHTML = '';
+        
+        let peerCount = 0;
+        for (const peer in peers) {
+          peerCount++;
+          const li = document.createElement('li');
+          li.textContent = peer;
+          
+          const state = peers[peer].iceConnectionState;
+          const stateSpan = document.createElement('span');
+          stateSpan.textContent = state;
+          stateSpan.className = 'peer-indicator';
+          
+          // Color-code based on connection state
+          if (state === 'connected' || state === 'completed') {
+            stateSpan.classList.add('bg-green-100', 'text-green-800');
+          } else if (state === 'checking' || state === 'new') {
+            stateSpan.classList.add('bg-yellow-100', 'text-yellow-800');
+          } else {
+            stateSpan.classList.add('bg-red-100', 'text-red-800');
+          }
+          
+          li.appendChild(stateSpan);
+          peerList.appendChild(li);
+        }
+        
+        if (peerCount === 0) {
+          const li = document.createElement('li');
+          li.textContent = 'No peers connected';
+          li.classList.add('italic', 'text-gray-500');
+          peerList.appendChild(li);
+        }
+      }
+
+      function startPeerConnection(peerId, isInitiator) {
+        logDebug(`Creating ${isInitiator ? 'initiator' : 'receiver'} peer connection for ${peerId}`);
+        
+        // Use better ICE servers configuration with fallbacks
+        const pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            // Add free TURN servers if available
+            // { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+          ]
+        });
+
+        // Log ICE state changes
+        pc.oniceconnectionstatechange = () => {
+          const state = pc.iceConnectionState;
+          logDebug(`ICE state for ${peerId}: ${state}`);
+          updatePeerList();
+          
+          // Handle disconnections
+          if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+            logDebug(`Connection with ${peerId} is ${state}`);
+          }
+        };
+        
+        // Add all local tracks
+        if (localStream) {
+          localStream.getTracks().forEach(track => {
+            logDebug(`Adding local ${track.kind} track to connection with ${peerId}`);
+            pc.addTrack(track, localStream);
+          });
+        }
+
+        // Handle ICE candidates
+        pc.onicecandidate = e => {
+          if (e.candidate) {
+            logDebug(`Sending ICE candidate to ${peerId}`);
+            socket.emit('ice-candidate', { 
+              to: peerId, 
+              candidate: e.candidate 
+            });
+          }
+        };
+
+        // Handle incoming tracks
+        pc.ontrack = e => {
+          logDebug(`Received ${e.track.kind} track from ${peerId}`);
+          
+          // Create or get audio element for this peer
+          let audio = document.getElementById(`audio-${peerId}`);
+          if (!audio) {
+            // Create container and label
+            const audioWrapper = document.createElement('div');
+            audioWrapper.className = 'mb-2';
+            
+            // Create label with audio meter
+            const label = document.createElement('div');
+            label.className = 'audio-label';
+            
+            const callsignSpan = document.createElement('span');
+            callsignSpan.textContent = peerId;
+            label.appendChild(callsignSpan);
+            
+            const remoteIndicator = document.createElement('span');
+            remoteIndicator.className = 'audio-level audio-inactive';
+            label.appendChild(remoteIndicator);
+            
+            audioWrapper.appendChild(label);
+            
+            // Create audio element with custom styling
+            audio = document.createElement('audio');
+            audio.id = `audio-${peerId}`;
+            audio.className = 'custom-audio';
+            audio.autoplay = true;
+            
+            // Hide standard controls for cleaner look
+            audio.controls = false;
+            
+            audioWrapper.appendChild(audio);
+            audioContainer.appendChild(audioWrapper);
+            
+            // Only show audio container if it has children
+            if (audioContainer.children.length > 0) {
+              audioContainer.classList.remove('hidden');
+            }
+            
+            setTimeout(() => {
+              if (audio.srcObject) {
+                createAudioMeter(audio.srcObject, remoteIndicator);
+              }
+            }, 1000);
+          }
+          
+          audio.srcObject = e.streams[0];
+          
+          // Make sure audio plays
+          audio.play().catch(err => {
+            logDebug(`Audio play() failed: ${err.message}`);
+            // Try playing on user interaction
+            document.addEventListener('click', () => {
+              audio.play().catch(e => logDebug(`Retry play failed: ${e.message}`));
+            }, { once: true });
+          });
+        };
+
+        // Create and send offer if we're the initiator
+        if (isInitiator) {
+          pc.createOffer()
+            .then(offer => {
+              logDebug(`Created offer for ${peerId}`);
+              return pc.setLocalDescription(offer);
+            })
+            .then(() => {
+              logDebug(`Sending offer to ${peerId}`);
+              socket.emit('offer', { 
+                to: peerId, 
+                offer: pc.localDescription 
+              });
+            })
+            .catch(err => logDebug(`Error creating offer: ${err.message}`));
+        }
+
+        // Store the peer connection
+        peers[peerId] = pc;
+        updatePeerList();
+        return pc;
+      }
+
+      // Handle incoming offers
+      socket.on('offer', async ({ from, offer }) => {
+        logDebug(`Received offer from ${from}`);
+        if (!micAvailable) {
+          logDebug('Cannot accept offer: microphone not available');
+          return;
+        }
+        
+        await initLocalStream();
+        
+        try {
+          const pc = peers[from] || startPeerConnection(from, false);
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          logDebug(`Set remote description for ${from}`);
+          
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          logDebug(`Created and set local answer for ${from}`);
+          
+          socket.emit('answer', { 
+            to: from, 
+            answer: pc.localDescription 
+          });
+          logDebug(`Sent answer to ${from}`);
+        } catch (err) {
+          logDebug(`Error handling offer: ${err.message}`);
+        }
+      });
+
+      // Handle incoming answers
+      socket.on('answer', async ({ from, answer }) => {
+        logDebug(`Received answer from ${from}`);
+        const pc = peers[from];
+        if (pc) {
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            logDebug(`Set remote description from ${from}'s answer`);
+          } catch (err) {
+            logDebug(`Error setting remote description: ${err.message}`);
+          }
+        } else {
+          logDebug(`No peer connection for ${from}`);
+        }
+      });
+
+      // Handle incoming ICE candidates
+      socket.on('ice-candidate', async ({ from, candidate }) => {
+        logDebug(`Received ICE candidate from ${from}`);
+        const pc = peers[from];
+        if (pc) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            logDebug(`Added ICE candidate from ${from}`);
+          } catch (err) {
+            logDebug(`Error adding ICE candidate: ${err.message}`);
+          }
+        } else {
+          logDebug(`No peer connection for ${from}`);
+        }
+      });
+
+      // Handle RX indicator
+      socket.on('tx', ({ from, on }) => {
+        if (from !== myCallsign) {
+          logDebug(`${from} is ${on ? 'transmitting' : 'stopped transmitting'}`);
+          if (on) rxBtn.classList.add('bg-black', 'text-white', 'opacity-100');
+          else rxBtn.classList.remove('bg-black', 'text-white', 'opacity-100');
+        }
+      });
+
+      // Handle TX (Push-to-talk)
+      let txOn = false;
+      
+      document.addEventListener('keydown', async e => {
+        if ((e.code === 'Space' || e.code === 'KeyT') && !txOn) {
+          txOn = true;
+          if (micAvailable) {
+            await initLocalStream();
+            localStream.getAudioTracks()[0].enabled = true;
+            socket.emit('tx', true);
+            txBtn.classList.add('bg-black', 'text-white', 'opacity-100');
+            logDebug('Started transmitting');
+          }
+          e.preventDefault();
+        }
+      });
+      
+      document.addEventListener('keyup', e => {
+        if ((e.code === 'Space' || e.code === 'KeyT') && txOn) {
+          txOn = false;
+          if (micAvailable) {
+            localStream.getAudioTracks()[0].enabled = false;
+            socket.emit('tx', false);
+            txBtn.classList.remove('bg-black', 'text-white', 'opacity-100');
+            logDebug('Stopped transmitting');
+          }
+          e.preventDefault();
+        }
+      });
+
+      // Search for nearby frequencies
+      searchBtn.addEventListener('click', async () => {
+        const baseFreq = freqInput.value.trim();
+        if (!baseFreq) {
+          alert('Please enter a frequency to search near');
+          return;
+        }
+        
+        freqList.innerHTML = '<li class="italic">Loading...</li>';
+        
+        try {
+          const res = await fetch(`${API_URL}/nearby-frequencies?freq=${encodeURIComponent(baseFreq)}`);
+          const data = await res.json();
+          
+          if (!data.nearby || !Array.isArray(data.nearby)) {
+            throw new Error('Invalid response format');
+          }
+          
+          const nearby = data.nearby;
+          freqList.innerHTML = '';
+          
+          if (nearby.length) {
+            nearby.forEach(freq => {
+              const li = document.createElement('li');
+              li.textContent = freq;
+              li.className = 'cursor-pointer hover:underline';
+              li.addEventListener('click', () => { 
+                freqInput.value = freq;
+                logDebug(`Selected frequency: ${freq}`);
+              });
+              freqList.appendChild(li);
+            });
+          } else {
+            freqList.innerHTML = '<li class="italic">No nearby frequencies found.</li>';
+          }
+        } catch (err) {
+          logDebug(`Error searching frequencies: ${err.message}`);
+          freqList.innerHTML = '<li class="italic text-red-500">Failed to load nearby frequencies.</li>';
+        }
+      });
+
+      // Connect to a frequency
+      connectBtn.addEventListener('click', async () => {
+        myCallsign = document.getElementById('callsign').value.trim();
+        myFreq = freqInput.value.trim();
+        
+        if (!myCallsign) {
+          alert('Please enter your callsign');
+          return;
+        }
+        
+        if (!myFreq) {
+          alert('Please enter a frequency');
+          return;
+        }
+        
+        // Initialize audio
+        await initLocalStream();
+        
+        // Close any existing connections
+        Object.keys(peers).forEach(peerId => {
+          peers[peerId].close();
+          delete peers[peerId];
+        });
+        
+        // Clear audio elements
+        audioContainer.innerHTML = '';
+        
+        // Update UI
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Connecting...';
+        
+        // Join the frequency
+        socket.emit('join', { callsign: myCallsign, frequency: myFreq });
+        logDebug(`Joined frequency ${myFreq} as ${myCallsign}`);
+        
+        // Update UI
+        setTimeout(() => {
+          connectBtn.disabled = false;
+          connectBtn.textContent = 'Connect';
+        }, 2000);
+      });
+      
+      // Connection status handling
+      socket.on('connect', () => {
+        logDebug('Connected to server');
+      });
+      
+      socket.on('disconnect', () => {
+        logDebug('Disconnected from server');
+        // Clean up peer connections
+        Object.keys(peers).forEach(peerId => {
+          peers[peerId].close();
+          delete peers[peerId];
+        });
+        updatePeerList();
+      });
+      
+      // Initialize the page
+      updatePeerList();
+    });
+  </script>
+</body>
+</html>
